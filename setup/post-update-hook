@@ -1,0 +1,19 @@
+#!/bin/bash
+# Omarchy post-update hook: re-patch Spotify after an update replaced it.
+# Install with: omarchy hook install post-update <this file>
+# A patched Spotify has Apps/xpui/ and no Apps/xpui.spa; a fresh package
+# brings xpui.spa back, so that is the signal to re-apply.
+command -v spicetify >/dev/null || exit 0
+[[ -f /opt/spotify/Apps/xpui.spa ]] || exit 0
+
+user=$(id -un)
+# Runs inside the update's sudo authorization; -n so it never hangs on a prompt.
+sudo -n sh -c "setfacl -m u:$user:rwx /opt/spotify && setfacl -R -m u:$user:rwX /opt/spotify/Apps && setfacl -R -d -m u:$user:rwX /opt/spotify/Apps" \
+  || { echo "spotify-like: could not restore write access, run setup/grant-spotify-write-access" >&2; exit 0; }
+# Apply with no network (unprivileged user+net namespace): spicetify would
+# otherwise download css-map.json from GitHub (main branch) and string-replace
+# it into Spotify's JavaScript, bypassing the AUR package's checksum pin. With
+# the fetch failing it uses the css-map.json shipped in the package. Inside the
+# namespace we look like root to spicetify, hence --bypass-admin; -n because a
+# Spotify started in there would have no network either.
+unshare --map-root-user --net spicetify --bypass-admin --no-restart backup apply || echo "spotify-like: spicetify backup apply failed, run it by hand" >&2

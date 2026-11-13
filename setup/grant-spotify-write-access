@@ -1,0 +1,8 @@
+#!/bin/bash
+# Give only your user write access to the parts of /opt/spotify that Spicetify
+# patches (instead of the `chmod a+wr` Spicetify's docs suggest). Needs sudo.
+# Undo: sudo setfacl -R -b /opt/spotify
+set -euo pipefail
+user=${SUDO_USER:-$USER}
+sudo sh -c "setfacl -m u:$user:rwx /opt/spotify && setfacl -R -m u:$user:rwX /opt/spotify/Apps && setfacl -R -d -m u:$user:rwX /opt/spotify/Apps"
+getfacl -p /opt/spotify/Apps | grep "user:$user"

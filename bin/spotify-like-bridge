@@ -1,0 +1,307 @@
+#!/usr/bin/python3 -I
+"""Localhost bridge between the spotify-like Spicetify extension and the bar.
+
+The extension inside the Spotify desktop app connects here over a WebSocket and
+reports the playing track and whether it is in Liked Songs. The bar plugin runs
+this program and talks to it over stdin/stdout:
+
+  stdout  one JSON object per line:
+          {"type": "state", "connected": bool, "uri": str, "liked": bool|null}
+          {"type": "error", "message": str}
+  stdin   one command per line:
+          set <spotify:track:id> <0|1>    add to / remove from Liked Songs
+
+Security (see the vault note "2026-11-12 Spotify like button"):
+- binds 127.0.0.1 only;
+- accepts a WebSocket handshake only from the Spotify app's origin, so web
+  pages in a browser cannot connect (browsers always send their real Origin);
+- accepts only small, fully validated messages; anything else drops the client.
+
+Standard library only. Run with `python3 -I` so nothing is imported from the
+working directory or the user's site-packages.
+"""
+
+import base64
+import hashlib
+import json
+import os
+import re
+import socket
+import struct
+import sys
+import threading
+import time
+
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("SPOTIFY_LIKE_PORT", "47851"))
+ALLOWED_ORIGINS = frozenset(
+    o.strip()
+    for o in os.environ.get(
+        "SPOTIFY_LIKE_ORIGINS", "https://xpui.app.spotify.com"
+    ).split(",")
+    if o.strip()
+)
+URI_RE = re.compile(r"spotify:track:[A-Za-z0-9]{22}")
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_HANDSHAKE = 8192
+MAX_PAYLOAD = 2048
+HANDSHAKE_TIMEOUT = 5.0
+STALE_AFTER = 20.0  # the extension sends a heartbeat every 5 s
+
+out_lock = threading.Lock()
+state_lock = threading.Lock()
+state = {"connected": False, "uri": "", "liked": None}
+current = {"conn": None, "last_seen": 0.0}
+
+
+def emit(obj):
+    with out_lock:
+        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+
+
+def log(msg):
+    with out_lock:
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+
+
+def publish(connected, uri, liked):
+    with state_lock:
+        new = {"connected": connected, "uri": uri, "liked": liked}
+        if new == state:
+            return
+        state.update(new)
+    emit({"type": "state", **new})
+
+
+# --- WebSocket plumbing -----------------------------------------------------
+
+
+def recv_exact(conn, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = conn.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("closed")
+        buf += chunk
+    return buf
+
+
+def send_frame(conn, opcode, payload=b""):
+    header = bytes([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        header += bytes([n])
+    elif n < 65536:
+        header += bytes([126]) + struct.pack("!H", n)
+    else:
+        raise ValueError("payload too large")
+    conn.sendall(header + payload)
+
+
+def read_frame(conn):
+    b1, b2 = recv_exact(conn, 2)
+    fin, opcode = b1 & 0x80, b1 & 0x0F
+    masked, length = b2 & 0x80, b2 & 0x7F
+    if not fin or opcode == 0:
+        raise ValueError("fragmented frames are not accepted")
+    if not masked:
+        raise ValueError("client frames must be masked")
+    if length == 126:
+        (length,) = struct.unpack("!H", recv_exact(conn, 2))
+    elif length == 127:
+        raise ValueError("frame too large")
+    if length > MAX_PAYLOAD:
+        raise ValueError("frame too large")
+    mask = recv_exact(conn, 4)
+    data = recv_exact(conn, length)
+    return opcode, bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+
+
+def read_handshake(conn):
+    conn.settimeout(HANDSHAKE_TIMEOUT)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = conn.recv(1024)
+        if not chunk:
+            raise ConnectionError("closed during handshake")
+        buf += chunk
+        if len(buf) > MAX_HANDSHAKE:
+            raise ValueError("handshake too large")
+    head = buf.split(b"\r\n\r\n", 1)[0].decode("latin-1")
+    lines = head.split("\r\n")
+    request = lines[0].split(" ")
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+    return request, headers
+
+
+def reject(conn, status):
+    try:
+        conn.sendall(
+            f"HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode()
+        )
+    except OSError:
+        pass
+
+
+def handshake(conn):
+    request, headers = read_handshake(conn)
+    if len(request) != 3 or request[0] != "GET" or request[1] != "/":
+        reject(conn, "404 Not Found")
+        return False
+    origin = headers.get("origin", "")
+    if origin not in ALLOWED_ORIGINS:
+        # Logged so the real Spotify origin can be confirmed on first use.
+        log(f"rejected origin: {origin[:200]!r}")
+        reject(conn, "403 Forbidden")
+        return False
+    host = headers.get("host", "")
+    if host not in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
+        reject(conn, "403 Forbidden")
+        return False
+    key = headers.get("sec-websocket-key", "")
+    if headers.get("upgrade", "").lower() != "websocket" or len(key) != 24:
+        reject(conn, "400 Bad Request")
+        return False
+    accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+    conn.sendall(
+        (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+        ).encode()
+    )
+    conn.settimeout(None)
+    return True
+
+
+# --- Messages ---------------------------------------------------------------
+
+
+def parse_state(payload):
+    """Return (uri, liked) from a client message, or raise ValueError."""
+    msg = json.loads(payload.decode("utf-8"))
+    if not isinstance(msg, dict) or msg.get("type") != "state":
+        raise ValueError("unknown message")
+    uri, liked = msg.get("uri"), msg.get("liked")
+    if not isinstance(uri, str) or not (uri == "" or URI_RE.fullmatch(uri)):
+        raise ValueError("bad uri")
+    if liked is not None and not isinstance(liked, bool):
+        raise ValueError("bad liked")
+    if uri == "":
+        liked = None
+    return uri, liked
+
+
+def serve_client(conn, addr):
+    try:
+        if not handshake(conn):
+            return
+        with state_lock:
+            old = current["conn"]
+            current["conn"] = conn
+            current["last_seen"] = time.monotonic()
+        if old is not None:  # newest connection wins (e.g. Spotify reloaded)
+            try:
+                # shutdown, not close: it wakes the old thread's blocking recv.
+                old.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        while True:
+            opcode, payload = read_frame(conn)
+            if opcode == 0x8:  # close
+                try:
+                    send_frame(conn, 0x8)
+                except OSError:
+                    pass
+                return
+            if opcode == 0x9:  # ping
+                send_frame(conn, 0xA, payload)
+                continue
+            if opcode != 0x1:
+                raise ValueError("only text frames are accepted")
+            uri, liked = parse_state(payload)
+            with state_lock:
+                if current["conn"] is not conn:
+                    return
+                current["last_seen"] = time.monotonic()
+            publish(True, uri, liked)
+    except (OSError, ValueError, ConnectionError, UnicodeDecodeError) as exc:
+        if not isinstance(exc, ConnectionError):
+            log(f"dropping client: {exc}")
+    finally:
+        with state_lock:
+            was_current = current["conn"] is conn
+            if was_current:
+                current["conn"] = None
+        if was_current:
+            publish(False, "", None)
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def watchdog():
+    while True:
+        time.sleep(2)
+        with state_lock:
+            conn = current["conn"]
+            stale = conn is not None and time.monotonic() - current["last_seen"] > STALE_AFTER
+        if stale:
+            log("client went quiet, dropping it")
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+def send_command(uri, liked):
+    with state_lock:
+        conn = current["conn"]
+    if conn is None:
+        emit({"type": "error", "message": "Spotify extension not connected"})
+        return
+    body = json.dumps({"type": "set", "uri": uri, "liked": liked}).encode()
+    try:
+        send_frame(conn, 0x1, body)
+    except OSError as exc:
+        emit({"type": "error", "message": f"send failed: {exc}"})
+
+
+def read_commands():
+    for line in sys.stdin:
+        parts = line.split()
+        if len(parts) == 3 and parts[0] == "set" and URI_RE.fullmatch(parts[1]) and parts[2] in ("0", "1"):
+            send_command(parts[1], parts[2] == "1")
+        elif parts:
+            emit({"type": "error", "message": "unknown command"})
+    # stdin closed: the shell went away, so do we.
+    os._exit(0)
+
+
+def main():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind((HOST, PORT))
+    except OSError as exc:
+        emit({"type": "error", "message": f"cannot listen on {HOST}:{PORT}: {exc.strerror}"})
+        return 1
+    srv.listen(4)
+    emit({"type": "state", **state})
+    threading.Thread(target=watchdog, daemon=True).start()
+    threading.Thread(target=read_commands, daemon=True).start()
+    while True:
+        conn, addr = srv.accept()
+        threading.Thread(target=serve_client, args=(conn, addr), daemon=True).start()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
