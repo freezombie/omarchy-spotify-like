@@ -119,4 +119,6 @@ fi
 
 step "Done"
 say "Play a song in Spotify: the heart appears next to the media widget."
-say "If it doesn't, see README → Troubleshooting."
+say "  Left-click it to add the song to Liked Songs."
+say "  Right-click it to remove the song from Liked Songs."
+say "If it doesn't appear, see README → Troubleshooting."
