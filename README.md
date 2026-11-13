@@ -1,15 +1,15 @@
 # Spotify Like
 
-An Omarchy bar widget: a heart next to the media widget that shows whether
+An Omarchy bar widget: a heart next to your media widget that shows whether
 the Spotify track playing now is in your Liked Songs.
 
 - Outline heart: not liked. Left-click adds the track to Liked Songs.
 - Filled heart in the theme's accent colour: liked. Right-click removes it
   (so a stray left-click never unlikes a song).
 - Likes you make in the Spotify app show up in the bar within a few seconds.
-- The heart shows and hides together with your media widget (see
-  [Settings](#settings)), and is hidden for podcasts and ads, which can't be
-  liked.
+- It sits next to your media widget, on the side you choose, and shows and
+  hides the way that widget shows Spotify (see [Settings](#settings)). It's
+  hidden for podcasts and ads, which can't be liked.
 
 It works on **Spotify Free**. Spotify's Web API needs Premium and a developer
 app for this, so instead a small [Spicetify](https://spicetify.app) extension
@@ -50,6 +50,9 @@ omarchy plugin add https://github.com/freezombie/omarchy-spotify-like --enable
 5. Offers a post-update hook (`~/.config/omarchy/hooks/post-update.d/spotify-like-repatch`)
    that re-patches Spotify after `omarchy update` installs a new Spotify
    (closing and reopening Spotify if it's running).
+6. Asks which side of your media widget the heart goes on (right, left, or
+   leave it where it is) and moves it there. This is the `placement` setting
+   below.
 
 It's safe to run again. `--yes` accepts the default answers.
 
@@ -62,25 +65,52 @@ omarchy-shell freezombie.spotify-like status   # {"connected":true,"uri":"spotif
 omarchy-shell freezombie.spotify-like like
 omarchy-shell freezombie.spotify-like unlike
 omarchy-shell freezombie.spotify-like toggle
+omarchy-shell freezombie.spotify-like place after   # or before: put it next to the media widget now
 ```
 
 ## Settings
 
-Put the heart next to your media widget, e.g.:
+Set these with `omarchy bar set freezombie.spotify-like <setting> <value>`.
+
+| Setting | Values | Default |
+|---|---|---|
+| `placement` | `after` (right of the media widget; below it on a vertical bar), `before` (left; above), `manual` | `manual` until `setup/install` asks |
+| `hideWhen` | `auto`, `never`, `stopped`, `paused` | `auto` |
+| `mediaWidget` | a widget id | recognised automatically |
+
+**Placement.** With `after` or `before`, the heart moves next to your media
+widget when you set it, when you switch to another media widget, and when you
+move the media widget. If you drag the heart somewhere else yourself, it
+stays there (until you change `placement` or run `omarchy-shell
+freezombie.spotify-like place after`). It moves itself with
+`omarchy bar move`, which edits your `shell.json`; `manual` leaves your bar
+alone.
+
+**When it hides.** Media widgets differ on a Spotify that has a song loaded but
+isn't playing (right after it opens, until you press play). With `auto` the
+heart does what your media widget does:
+
+| Media widget | Stopped Spotify |
+|---|---|
+| `crmne.mpris` | hidden |
+| `io.github.qempexe.omaudix` | hidden; follows its own `hideWhen` |
+| `io.github.erikburdett.wavebar` | shown; hidden while paused with its `hideWhenPaused` |
+| `omarchy.media` (built in), `now-playing`, `custom.media`, `io.github.elliotalien.tide`, `nenadjokic.navibeat`, `lancefaul.omedia-controls`, `bibek.media`, `io.github.joshz7.afterglow`, `celestune-bar` | shown |
+
+`never` shows the heart whenever a song is loaded, `stopped` hides it while
+Spotify is stopped, and `paused` whenever Spotify isn't playing. In every case
+it hides while another player (a video in the browser, say) is playing and
+Spotify isn't, because media widgets then show that player instead.
+
+**Other media widgets.** If yours isn't in the table, for example a clone such
+as `yourname.media`, name it so placement and `auto` use it:
 
 ```bash
-omarchy bar move freezombie.spotify-like --after crmne.mpris    # or --after omarchy.media
+omarchy bar set freezombie.spotify-like mediaWidget yourname.media
 ```
 
-Right after Spotify opens, it reports a loaded song as stopped until you press
-play. Media widgets differ there: `crmne.mpris` hides it, Omarchy's built-in
-`omarchy.media` shows it. The heart follows whichever of the two is in the
-bar (`crmne.mpris` wins if both are). For another media widget, set it
-yourself:
-
-```bash
-omarchy bar set freezombie.spotify-like showWhenStopped true    # or false
-```
+`quickshell.spotify` and OmaSpotify have a heart of their own for their built-in
+player; this plugin is for the Spotify desktop app.
 
 ## Updating
 
@@ -111,14 +141,20 @@ other things, it re-applies your setup without this extension.
 ## Troubleshooting
 
 - **No heart while a song plays.** Run `omarchy-shell freezombie.spotify-like status`.
-  - `"spotifyStopped":true` means Spotify hasn't started playback yet; with
-    `crmne.mpris` (or `showWhenStopped` false) the heart waits for you to press
-    play, like the media widget does.
+  - `"showHeart":false` with `"spotifyStopped":true` means Spotify hasn't
+    started playback yet and your media widget (`"mediaWidget"`, rule
+    `"hideWhen"`) hides it until you press play; the heart does the same.
+  - `"otherPlayerPlaying":true` means another player is playing; media widgets
+    show that one, so the heart hides.
   - `"connected":false` means the extension isn't talking to the bar. Restart
     Spotify, then look for `spotify-like` lines in the shell log
     (`qs log -p /usr/share/omarchy/shell | grep spotify-like`).
   - A `rejected origin` line there means your Spotify identifies itself
     differently; please open an issue with that line.
+- **The heart isn't next to the media widget.** Check `"mediaWidget"` and
+  `"placement"` in the status. An empty `mediaWidget` means yours isn't
+  recognised: set `mediaWidget` (see [Settings](#settings)). Then run
+  `omarchy-shell freezombie.spotify-like place after` (or `before`).
 - **The heart disappeared after `omarchy update`.** A new Spotify replaced
   the patched files. The post-update hook normally re-patches it; if you
   skipped the hook or it failed, run `setup/install` again.
@@ -138,7 +174,11 @@ Spotify app ── Spicetify extension ──ws://127.0.0.1:47851──> bin/spo
 - `bin/spotify-like-bridge` is a small WebSocket server (Python standard
   library only) that passes messages between the extension and the shell.
 - `Service.qml` runs the bridge once for the whole shell, keeps the state and
-  offers the IPC commands. `BarWidget.qml` is the heart.
+  offers the IPC commands. `BarWidget.qml` is the heart; it reports the bar
+  layout to the service.
+- `MediaWidgets.js` finds the media widget in the bar layout, decides when the
+  heart hides, and when it should move. The service then runs
+  `omarchy-bar move freezombie.spotify-like --after <media widget>`.
 
 ## Security
 
@@ -181,6 +221,7 @@ can. Both ends were written to keep that narrow.
 ```bash
 /usr/bin/python3 -I -m unittest discover -s tests   # bridge, with a fake client
 node tests/test_extension.mjs                       # extension, with a fake Spicetify
+node tests/test_media_widgets.mjs                   # media widget detection and placement
 ```
 
 ## License

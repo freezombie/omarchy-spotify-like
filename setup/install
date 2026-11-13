@@ -57,7 +57,8 @@ else
   say "- Patch Spotify with Spicetify, offline (spicetify backup apply)."
 fi
 pgrep -x spotify >/dev/null && say "- Close Spotify while it's patched and start it again afterwards."
-say "- Offer safer Spicetify settings and a post-update hook (asked separately)."
+say "- Offer safer Spicetify settings and a post-update hook, and ask where the"
+say "  heart goes next to your media widget (each asked separately)."
 confirm "Continue?" yes || die "nothing changed"
 
 if ((need_acl)); then
@@ -115,6 +116,39 @@ if confirm "Install a post-update hook that re-patches Spotify after 'omarchy up
   omarchy hook install post-update "$here/$HOOK_NAME"
 else
   say "Skipped. After a Spotify update, run this script again."
+fi
+
+step "Bar placement"
+say "The heart can sit right or left of your media widget (below or above it on a"
+say "vertical bar). It follows when you switch or move the media widget, but stays"
+say "where you drag it."
+right="Right of the media widget"
+left="Left of the media widget"
+manual="Leave it where it is (I'll place it myself)"
+case $(omarchy bar get "$PLUGIN_ID" placement 2>/dev/null || true) in
+before) default=$left ;;
+manual) default=$manual ;;
+*) default=$right ;;
+esac
+answer=$(choose "Where should the heart go?" "$default" "$right" "$left" "$manual")
+case $answer in
+"$left") placement=before ;;
+"$manual") placement=manual ;;
+*) placement=after ;;
+esac
+if omarchy bar set "$PLUGIN_ID" placement "$placement" >/dev/null 2>&1; then
+  if [[ $placement == manual ]]; then
+    say "The heart stays where it is. Move it with: omarchy bar move $PLUGIN_ID --after <widget>"
+  else
+    case $(omarchy-shell "$PLUGIN_ID" place "$placement" 2>/dev/null || true) in
+    ok | adjacent) say "The heart is next to your media widget." ;;
+    no-media-widget) say "No recognised media widget in the bar yet; the heart moves next to one when you add it (README → Settings)." ;;
+    *) warn "couldn't place the heart now; it moves next to your media widget when the bar layout next changes" ;;
+    esac
+  fi
+else
+  warn "couldn't save the placement. Is the plugin on the bar? (omarchy plugin enable $PLUGIN_ID)"
+  warn "Set it later with: omarchy bar set $PLUGIN_ID placement after"
 fi
 
 step "Done"

@@ -3,6 +3,7 @@
 # Shared helpers for setup/install, setup/uninstall and the post-update hook
 # (setup/spotify-like-repatch). Sourced, not run.
 
+PLUGIN_ID=freezombie.spotify-like
 SPOTIFY_DIR=/opt/spotify
 EXT_NAME=spotify-like-bridge.js
 HOOK_NAME=spotify-like-repatch
@@ -65,6 +66,38 @@ confirm() {
     read -r -p "$prompt [y/N] " answer || { echo; die "aborted"; }
     [[ $answer == [Yy]* ]]
   fi
+}
+
+# choose <prompt> <default> <option>...: prints the chosen option. Meant for
+# $(...), so the menu goes to the terminal, not stdout. Ctrl-C or end of input
+# aborts the script. With --yes the default is used.
+choose() {
+  local prompt=$1 default=$2 answer rc=0 i choice=1
+  shift 2
+  if ((ASSUME_YES)); then
+    printf '%s\n' "$default"
+    return
+  fi
+  [[ -t 0 && -t 2 ]] || die "not running in a terminal; pass --yes to accept the defaults"
+  if command -v gum >/dev/null; then
+    answer=$(gum choose --header "$prompt" --selected "$default" "$@") || rc=$?
+    if ((rc != 0)) || [[ -z $answer ]]; then
+      die "aborted"
+    fi
+    printf '%s\n' "$answer"
+    return
+  fi
+  local options=("$@")
+  for i in "${!options[@]}"; do
+    [[ ${options[i]} == "$default" ]] && choice=$((i + 1))
+    printf '  %d) %s\n' $((i + 1)) "${options[i]}" >&2
+  done
+  read -r -p "$prompt [$choice] " answer || { echo >&2; die "aborted"; }
+  answer=${answer:-$choice}
+  if ! [[ $answer =~ ^[0-9]+$ ]] || ((answer < 1 || answer > ${#options[@]})); then
+    die "not one of the choices: $answer"
+  fi
+  printf '%s\n' "${options[answer - 1]}"
 }
 
 # Find Spicetify's config-xpui.ini once; ini_get reads it from then on.

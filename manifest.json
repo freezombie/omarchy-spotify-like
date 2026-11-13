@@ -20,6 +20,40 @@
     "description": "Heart for the playing Spotify track: left-click adds it to Liked Songs, right-click removes it.",
     "category": "Media",
     "allowMultiple": false,
-    "defaultSection": "center"
+    "defaultSection": "center",
+    "schema": [
+      {
+        "key": "placement",
+        "type": "enum",
+        "label": "Place next to the media widget",
+        "options": [
+          "after",
+          "before",
+          "manual"
+        ],
+        "defaultValue": "manual",
+        "description": "after = right of it (below on a vertical bar), before = left of it (above), manual = stay where you put it. The heart follows when you switch or move your media widget, not when you drag the heart. setup/install asks for this."
+      },
+      {
+        "key": "hideWhen",
+        "type": "enum",
+        "label": "Hide the heart",
+        "options": [
+          "auto",
+          "never",
+          "stopped",
+          "paused"
+        ],
+        "defaultValue": "auto",
+        "description": "auto = like your media widget; never = whenever a song is loaded; stopped = while Spotify is stopped (after it opens, until you press play); paused = whenever Spotify is not playing."
+      },
+      {
+        "key": "mediaWidget",
+        "type": "string",
+        "label": "Media widget id",
+        "defaultValue": "",
+        "description": "Widget id to follow when yours is not recognised automatically, e.g. a clone such as yourname.media."
+      }
+    ]
   }
 }

@@ -8,7 +8,8 @@ import qs.Ui
 // removes it (so a stray click never unlikes a song). Hidden while the
 // Spotify extension isn't connected or nothing likeable is playing, and
 // otherwise shown and hidden the way the media widget next to it shows
-// Spotify (see showWhenStopped).
+// Spotify. Service.qml decides that, and keeps the heart next to the media
+// widget, from the bar layout this widget reports.
 BarWidget {
   id: root
   moduleName: "freezombie.spotify-like"
@@ -17,32 +18,16 @@ BarWidget {
   readonly property bool hasTrack: service !== null && service.hasTrack === true
   readonly property bool liked: hasTrack && service.liked === true
 
-  // Media widgets differ on a Spotify that is Stopped but has a song loaded
-  // (right after it opens): crmne.mpris hides it, Omarchy's built-in
-  // omarchy.media shows it. Follow the one in this bar; the
-  // "showWhenStopped" setting in shell.json overrides the guess.
   readonly property var layout: bar && bar.layoutConfig ? bar.layoutConfig : ({})
-  // `omarchy bar set … showWhenStopped true` stores the string "true"; with
-  // --json it's a boolean. Accept both.
-  readonly property string showWhenStoppedSetting: String(setting("showWhenStopped", ""))
-  readonly property bool showWhenStopped: showWhenStoppedSetting === "true" || showWhenStoppedSetting === "false"
-    ? showWhenStoppedSetting === "true"
-    : layoutHas("omarchy.media") && !layoutHas("crmne.mpris")
+  onLayoutChanged: reportLayout()
+  onServiceChanged: reportLayout()
+  Component.onCompleted: reportLayout()
 
-  function layoutHas(id) {
-    for (var section in layout) {
-      var entries = layout[section]
-      if (!Array.isArray(entries)) continue
-      for (var i = 0; i < entries.length; i++) {
-        var entry = entries[i]
-        var entryId = entry && typeof entry === "object" ? entry.id : entry
-        if (String(entryId || "") === id) return true
-      }
-    }
-    return false
+  function reportLayout() {
+    if (service && typeof service.noteLayout === "function") service.noteLayout(layout)
   }
 
-  visible: hasTrack && (service.spotifyStopped !== true || showWhenStopped)
+  visible: service !== null && service.showHeart === true
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
