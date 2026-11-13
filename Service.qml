@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Mpris
 
 // Runs bin/spotify-like-bridge once for the whole shell (the widget may be on
 // several bars) and keeps the latest state it reports.
@@ -15,12 +16,32 @@ Item {
   property var liked: null
   property string lastError: ""
 
-  readonly property bool hasTrack: connected && uri !== "" && liked !== null
+  // Spotify's MPRIS player. Media widgets (e.g. crmne.mpris) hide a player
+  // that is Stopped or has no track metadata, as Spotify is right after it
+  // opens until playback starts. The heart follows the same rule so it never
+  // shows without a song next to it.
+  readonly property var players: Mpris.players ? Mpris.players.values : []
+  readonly property var spotifyPlayer: findSpotifyPlayer()
+  readonly property bool spotifyActive: spotifyPlayer !== null
+    && spotifyPlayer.playbackState !== MprisPlaybackState.Stopped
+    && !!(spotifyPlayer.trackTitle || spotifyPlayer.trackArtist)
+
+  readonly property bool hasTrack: connected && uri !== "" && liked !== null && spotifyActive
   readonly property var uriPattern: /^spotify:track:[A-Za-z0-9]{22}$/
 
   readonly property string bridgePath: {
     var path = String(Qt.resolvedUrl("bin/spotify-like-bridge"))
     return path.indexOf("file://") === 0 ? decodeURIComponent(path.substring(7)) : path
+  }
+
+  function findSpotifyPlayer() {
+    for (var i = 0; i < players.length; i++) {
+      var player = players[i]
+      if (!player) continue
+      var dbus = String(player.dbusName || "")
+      if (dbus.indexOf("org.mpris.MediaPlayer2.spotify") === 0 || String(player.identity || "") === "Spotify") return player
+    }
+    return null
   }
 
   function setLiked(value) {
@@ -47,7 +68,7 @@ Item {
   }
 
   function statusObject() {
-    return { connected: connected, uri: uri, liked: liked, error: lastError, bridgeRunning: bridge.running }
+    return { connected: connected, uri: uri, liked: liked, spotifyActive: spotifyActive, error: lastError, bridgeRunning: bridge.running }
   }
 
   Process {

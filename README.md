@@ -7,8 +7,9 @@ the Spotify track playing now is in your Liked Songs.
 - Filled heart in the theme's accent colour: liked. Right-click removes it
   (so a stray left-click never unlikes a song).
 - Likes you make in the Spotify app show up in the bar within a few seconds.
-- The heart is hidden while nothing likeable plays (podcasts, ads, Spotify
-  closed).
+- The heart is hidden whenever a media widget would hide Spotify: Spotify
+  closed or stopped (also right after it opens, until you press play). It's
+  also hidden for podcasts and ads, which can't be liked.
 
 It works on **Spotify Free**. Spotify's Web API needs Premium and a developer
 app for this, so instead a small [Spicetify](https://spicetify.app) extension
@@ -89,6 +90,8 @@ other things, it re-applies your setup without this extension.
 ## Troubleshooting
 
 - **No heart while a song plays.** Run `omarchy-shell freezombie.spotify-like status`.
+  - `"spotifyActive":false` means Spotify hasn't started playback (or is
+    stopped); press play.
   - `"connected":false` means the extension isn't talking to the bar. Restart
     Spotify, then look for `spotify-like` lines in the shell log
     (`qs log -p /usr/share/omarchy/shell | grep spotify-like`).
