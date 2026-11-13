@@ -1,0 +1,122 @@
+#!/bin/bash
+# Set up the Spotify side of freezombie.spotify-like: write access to
+# /opt/spotify, the Spicetify extension, and a hook that re-patches Spotify
+# after `omarchy update`. Asks before each change. Safe to run again (also
+# after `omarchy plugin update`). Undo with setup/uninstall.
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+plugin_dir=$(dirname "$here")
+# shellcheck source=setup/common.sh
+. "$here/common.sh"
+parse_args "$@"
+
+step "Checking requirements"
+missing=0
+need() {
+  if ! command -v "$1" >/dev/null; then
+    warn "$1 not found: $2"
+    missing=1
+  fi
+}
+need spicetify "install it with: omarchy pkg aur add spicetify-cli"
+need setfacl "install it with: omarchy pkg add acl"
+need unshare "install it with: omarchy pkg add util-linux"
+need omarchy "this plugin is for Omarchy"
+[[ -x /usr/bin/python3 ]] || { warn "/usr/bin/python3 not found: install it with: omarchy pkg add python"; missing=1; }
+[[ -d $SPOTIFY_DIR/Apps ]] || { warn "Spotify not found in $SPOTIFY_DIR: install it with: omarchy pkg add spotify"; missing=1; }
+((missing == 0)) || die "install the missing pieces above and run this again"
+unshare --map-root-user --net true 2>/dev/null ||
+  die "unprivileged user namespaces are disabled, so spicetify can't run offline (see README → Security)"
+
+# The first spicetify run creates its config and finds /opt/spotify.
+spicetify path >/dev/null 2>&1 || true
+load_spicetify_config
+[[ -f $SPICETIFY_CONFIG ]] || die "spicetify has no config file; run 'spicetify' once and try again"
+
+# A Spicetify setup counts as existing when Spotify was patched before or the
+# config has a theme, other extensions or custom apps.
+state=$(spotify_state)
+other_exts=$(ini_get AdditionalOptions extensions | tr '|' '\n' | grep -vx "$EXT_NAME" | grep -v '^$' || true)
+existing=0
+if [[ $state != stock || -n $(ini_get Setting current_theme) || -n $other_exts || -n $(ini_get AdditionalOptions custom_apps) ]]; then
+  existing=1
+fi
+# An earlier run of this script set Spicetify up fresh: keep that.
+[[ $(state_get fresh_spicetify) == 1 ]] && existing=0
+
+need_acl=0
+[[ -w $SPOTIFY_DIR && -w $SPOTIFY_DIR/Apps ]] || need_acl=1
+
+step "What this will do"
+((need_acl)) && say "- Give your user (only) write access to $SPOTIFY_DIR with ACLs (needs sudo)."
+say "- Add the $EXT_NAME extension to Spicetify (your other extensions stay)."
+if [[ $state == applied ]]; then
+  say "- Re-apply Spicetify, offline."
+else
+  say "- Patch Spotify with Spicetify, offline (spicetify backup apply)."
+fi
+pgrep -x spotify >/dev/null && say "- Close Spotify while it's patched and start it again afterwards."
+say "- Offer safer Spicetify settings and a post-update hook (asked separately)."
+confirm "Continue?" yes || die "nothing changed"
+
+if ((need_acl)); then
+  step "Write access to $SPOTIFY_DIR"
+  grant_acl # no sudo options: prompt for the password if needed
+  state_set acl 1
+  say "Granted."
+fi
+
+step "Spicetify settings"
+say "Recommended (README → Security): no update check, no theme JavaScript and no"
+say "experimental features, home or sidebar patches, so only this extension runs."
+for key in "${HARDENING_KEYS[@]}"; do
+  say "  $key = 0   (now: $(ini_get "$(key_section "$key")" "$key"))"
+done
+if ((existing)); then
+  say "You already use Spicetify; turning these off can break themes or extensions that rely on them."
+  default=no
+else
+  default=yes
+fi
+if confirm "Apply these settings?" "$default"; then
+  # Remember the values from before the first change so uninstall can put them back.
+  if [[ $(state_get hardened) != 1 ]]; then
+    for key in "${HARDENING_KEYS[@]}"; do
+      state_set "prev_$key" "$(ini_get "$(key_section "$key")" "$key")"
+    done
+  fi
+  args=()
+  for key in "${HARDENING_KEYS[@]}"; do args+=("$key" 0); done
+  spicetify config "${args[@]}" >/dev/null
+  state_set hardened 1
+  say "Applied."
+else
+  say "Left as they are."
+fi
+
+step "Extension"
+mkdir -p "$SPICETIFY_EXT_DIR"
+ln -sfn "$plugin_dir/spicetify/$EXT_NAME" "$SPICETIFY_EXT_DIR/$EXT_NAME"
+if ! extension_enabled; then
+  # Appends to the list; other extensions stay.
+  spicetify config extensions "$EXT_NAME" >/dev/null
+fi
+say "Enabled $EXT_NAME."
+
+step "Patching Spotify (offline)"
+stop_spotify || die "Spotify didn't quit; close it and run this again"
+[[ $state == stock ]] && ((existing == 0)) && state_set fresh_spicetify 1
+spicetify_apply
+start_spotify_if_it_was_running
+
+step "Post-update hook"
+if confirm "Install a post-update hook that re-patches Spotify after 'omarchy update'?" yes; then
+  omarchy hook install post-update "$here/$HOOK_NAME"
+else
+  say "Skipped. After a Spotify update, run this script again."
+fi
+
+step "Done"
+say "Play a song in Spotify: the heart appears next to the media widget."
+say "If it doesn't, see README → Troubleshooting."

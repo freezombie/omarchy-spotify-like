@@ -1,0 +1,30 @@
+#!/bin/bash
+# Omarchy post-update hook from freezombie.spotify-like: re-patch Spotify
+# after an update replaced it. setup/install copies it to
+# ~/.config/omarchy/hooks/post-update.d/; setup/uninstall removes it.
+# The logic lives in the plugin's setup/common.sh, so plugin updates reach it.
+
+common="$HOME/.config/omarchy/plugins/freezombie.spotify-like/setup/common.sh"
+[[ -f $common ]] || exit 0 # the plugin was removed
+# shellcheck source=setup/common.sh
+. "$common"
+
+command -v spicetify >/dev/null || exit 0
+# A Spotify update brings the stock .spa packages back (stock or mixed state).
+case $(spotify_state) in
+stock | mixed) ;;
+*) exit 0 ;;
+esac
+
+load_spicetify_config
+extension_enabled || exit 0
+
+if [[ $(state_get acl) == 1 ]]; then
+  # The update replaced the files and their ACLs. Runs inside the update's
+  # sudo authorization; -n so it never hangs on a password prompt.
+  grant_acl -n || { warn "could not restore write access; run the plugin's setup/install"; exit 0; }
+fi
+
+stop_spotify || { warn "Spotify didn't quit; run the plugin's setup/install"; exit 0; }
+spicetify_offline backup apply || warn "re-patching Spotify failed; run the plugin's setup/install"
+start_spotify_if_it_was_running

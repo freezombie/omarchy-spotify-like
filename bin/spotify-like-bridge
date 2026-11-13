@@ -11,7 +11,7 @@ this program and talks to it over stdin/stdout:
   stdin   one command per line:
           set <spotify:track:id> <0|1>    add to / remove from Liked Songs
 
-Security (see the vault note "2026-11-12 Spotify like button"):
+Security (see README → Security):
 - binds 127.0.0.1 only;
 - accepts a WebSocket handshake only from the Spotify app's origin, so web
   pages in a browser cannot connect (browsers always send their real Origin);

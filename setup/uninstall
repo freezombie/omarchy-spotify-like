@@ -1,0 +1,98 @@
+#!/bin/bash
+# Undo setup/install: remove the extension from Spicetify, put back the
+# settings install changed, remove the post-update hook and, when Spotify is
+# back to stock, the write access. Asks before each change.
+# Then remove the plugin itself: omarchy plugin remove freezombie.spotify-like
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=setup/common.sh
+. "$here/common.sh"
+parse_args "$@"
+
+[[ -f $STATE_FILE ]] || warn "no install record at $STATE_FILE; undoing only what is clearly ours"
+confirm "Remove the Spotify Like extension and its setup?" yes || die "nothing changed"
+
+keep_acl=0
+if command -v spicetify >/dev/null; then
+  load_spicetify_config
+fi
+if [[ -f $SPICETIFY_CONFIG ]]; then
+  step "Spicetify"
+  if extension_enabled; then
+    spicetify config extensions "$EXT_NAME-" >/dev/null
+    say "Removed $EXT_NAME from the extension list."
+  fi
+
+  if [[ $(state_get hardened) == 1 ]]; then
+    args=()
+    for key in "${HARDENING_KEYS[@]}"; do
+      prev=$(state_get "prev_$key")
+      [[ -n $prev ]] && args+=("$key" "$prev")
+    done
+    if ((${#args[@]})); then
+      spicetify config "${args[@]}" >/dev/null
+      say "Put back the Spicetify settings install changed."
+    fi
+  fi
+
+  # Back to stock by default only when install set Spicetify up for this
+  # plugin alone and nothing else uses it now.
+  if [[ $(state_get fresh_spicetify) == 1 && -z $(ini_get AdditionalOptions extensions) &&
+    -z $(ini_get Setting current_theme) && -z $(ini_get AdditionalOptions custom_apps) ]]; then
+    default=yes
+  else
+    default=no
+  fi
+
+  state=$(spotify_state)
+  if [[ $state == applied || $state == mixed ]]; then
+    if confirm "Put Spotify back to stock? Say no to keep your other Spicetify customizations (re-applied without this extension)." "$default"; then
+      stop_spotify || die "Spotify didn't quit; close it and run this again"
+      if [[ $state == applied ]]; then
+        spicetify_offline restore
+      else
+        # A Spotify update already brought the stock packages back; remove the
+        # old patched folders left next to them.
+        for dir in "$SPOTIFY_DIR"/Apps/*/; do
+          [[ -f ${dir%/}.spa ]] && rm -rf -- "$dir"
+        done
+      fi
+      say "Spotify is stock again."
+    else
+      stop_spotify || die "Spotify didn't quit; close it and run this again"
+      spicetify_apply
+    fi
+    start_spotify_if_it_was_running
+  fi
+fi
+
+if [[ -L $SPICETIFY_EXT_DIR/$EXT_NAME ]]; then
+  rm -f "$SPICETIFY_EXT_DIR/$EXT_NAME"
+fi
+
+if [[ -f $HOOK_PATH ]]; then
+  rm -f "$HOOK_PATH"
+  say "Removed the post-update hook."
+fi
+
+if [[ $(state_get acl) == 1 ]]; then
+  step "Write access to $SPOTIFY_DIR"
+  if [[ $(spotify_state) == stock ]]; then
+    if confirm "Remove your write access and give $SPOTIFY_DIR/Apps back to root (needs sudo)?" yes; then
+      revoke_acl
+      say "Removed."
+    else
+      keep_acl=1
+    fi
+  else
+    say "Kept, because Spotify is still patched and Spicetify needs it."
+    keep_acl=1
+  fi
+fi
+
+rm -f "$STATE_FILE"
+# Remember the kept write access so a later uninstall can still remove it.
+((keep_acl == 0)) || state_set acl 1
+step "Done"
+say "Now remove the plugin: omarchy plugin remove freezombie.spotify-like"
