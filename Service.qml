@@ -16,17 +16,18 @@ Item {
   property var liked: null
   property string lastError: ""
 
-  // Spotify's MPRIS player. Media widgets (e.g. crmne.mpris) hide a player
-  // that is Stopped or has no track metadata, as Spotify is right after it
-  // opens until playback starts. The heart follows the same rule so it never
-  // shows without a song next to it.
+  // Spotify's MPRIS player, as media widgets see it. Whether the heart shows
+  // while Spotify is Stopped (as it is right after it opens, until playback
+  // starts) depends on the media widget next to it; BarWidget.qml decides.
   readonly property var players: Mpris.players ? Mpris.players.values : []
   readonly property var spotifyPlayer: findSpotifyPlayer()
-  readonly property bool spotifyActive: spotifyPlayer !== null
-    && spotifyPlayer.playbackState !== MprisPlaybackState.Stopped
+  readonly property bool spotifyHasInfo: spotifyPlayer !== null
     && !!(spotifyPlayer.trackTitle || spotifyPlayer.trackArtist)
+  readonly property bool spotifyStopped: spotifyPlayer !== null
+    && spotifyPlayer.playbackState === MprisPlaybackState.Stopped
 
-  readonly property bool hasTrack: connected && uri !== "" && liked !== null && spotifyActive
+  // A likeable track Spotify also shows to media widgets.
+  readonly property bool hasTrack: connected && uri !== "" && liked !== null && spotifyHasInfo
   readonly property var uriPattern: /^spotify:track:[A-Za-z0-9]{22}$/
 
   readonly property string bridgePath: {
@@ -68,7 +69,11 @@ Item {
   }
 
   function statusObject() {
-    return { connected: connected, uri: uri, liked: liked, spotifyActive: spotifyActive, error: lastError, bridgeRunning: bridge.running }
+    return {
+      connected: connected, uri: uri, liked: liked,
+      spotifyHasInfo: spotifyHasInfo, spotifyStopped: spotifyStopped,
+      error: lastError, bridgeRunning: bridge.running
+    }
   }
 
   Process {

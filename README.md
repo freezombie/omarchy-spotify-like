@@ -7,9 +7,9 @@ the Spotify track playing now is in your Liked Songs.
 - Filled heart in the theme's accent colour: liked. Right-click removes it
   (so a stray left-click never unlikes a song).
 - Likes you make in the Spotify app show up in the bar within a few seconds.
-- The heart is hidden whenever a media widget would hide Spotify: Spotify
-  closed or stopped (also right after it opens, until you press play). It's
-  also hidden for podcasts and ads, which can't be liked.
+- The heart shows and hides together with your media widget (see
+  [Settings](#settings)), and is hidden for podcasts and ads, which can't be
+  liked.
 
 It works on **Spotify Free**. Spotify's Web API needs Premium and a developer
 app for this, so instead a small [Spicetify](https://spicetify.app) extension
@@ -64,6 +64,24 @@ omarchy-shell freezombie.spotify-like unlike
 omarchy-shell freezombie.spotify-like toggle
 ```
 
+## Settings
+
+Put the heart next to your media widget, e.g.:
+
+```bash
+omarchy bar move freezombie.spotify-like --after crmne.mpris    # or --after omarchy.media
+```
+
+Right after Spotify opens, it reports a loaded song as stopped until you press
+play. Media widgets differ there: `crmne.mpris` hides it, Omarchy's built-in
+`omarchy.media` shows it. The heart follows whichever of the two is in the
+bar (`crmne.mpris` wins if both are). For another media widget, set it
+yourself:
+
+```bash
+omarchy bar set freezombie.spotify-like showWhenStopped true    # or false
+```
+
 ## Updating
 
 ```bash
@@ -93,8 +111,9 @@ other things, it re-applies your setup without this extension.
 ## Troubleshooting
 
 - **No heart while a song plays.** Run `omarchy-shell freezombie.spotify-like status`.
-  - `"spotifyActive":false` means Spotify hasn't started playback (or is
-    stopped); press play.
+  - `"spotifyStopped":true` means Spotify hasn't started playback yet; with
+    `crmne.mpris` (or `showWhenStopped` false) the heart waits for you to press
+    play, like the media widget does.
   - `"connected":false` means the extension isn't talking to the bar. Restart
     Spotify, then look for `spotify-like` lines in the shell log
     (`qs log -p /usr/share/omarchy/shell | grep spotify-like`).
