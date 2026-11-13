@@ -69,10 +69,13 @@ omarchy-shell freezombie.spotify-like toggle
 ```bash
 omarchy plugin update freezombie.spotify-like
 ~/.config/omarchy/plugins/freezombie.spotify-like/setup/install
+omarchy restart shell
 ```
 
 Spicetify copies the extension into Spotify when it patches, so run
-`setup/install` again after an update to pick up a changed extension.
+`setup/install` again after an update to pick up a changed extension. The
+shell keeps the plugin's service loaded, so restart it to load a changed
+`Service.qml`.
 
 ## Removal
 
