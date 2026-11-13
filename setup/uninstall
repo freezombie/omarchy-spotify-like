@@ -10,6 +10,19 @@ here=$(cd "$(dirname "$0")" && pwd)
 . "$here/common.sh"
 parse_args "$@"
 
+# Put back the Spicetify settings install changed (from install.state).
+put_back_settings() {
+  local key prev args=()
+  [[ $(state_get hardened) == 1 ]] || return 0
+  for key in "${HARDENING_KEYS[@]}"; do
+    prev=$(state_get "prev_$key")
+    [[ -n $prev ]] && args+=("$key" "$prev")
+  done
+  ((${#args[@]})) || return 0
+  spicetify config "${args[@]}" >/dev/null
+  say "Put back the Spicetify settings install changed."
+}
+
 [[ -f $STATE_FILE ]] || warn "no install record at $STATE_FILE; undoing only what is clearly ours"
 confirm "Remove the Spotify Like extension and its setup?" yes || die "nothing changed"
 
@@ -24,18 +37,6 @@ if [[ -f $SPICETIFY_CONFIG ]]; then
     say "Removed $EXT_NAME from the extension list."
   fi
 
-  if [[ $(state_get hardened) == 1 ]]; then
-    args=()
-    for key in "${HARDENING_KEYS[@]}"; do
-      prev=$(state_get "prev_$key")
-      [[ -n $prev ]] && args+=("$key" "$prev")
-    done
-    if ((${#args[@]})); then
-      spicetify config "${args[@]}" >/dev/null
-      say "Put back the Spicetify settings install changed."
-    fi
-  fi
-
   # Back to stock by default only when install set Spicetify up for this
   # plugin alone and nothing else uses it now.
   if [[ $(state_get fresh_spicetify) == 1 && -z $(ini_get AdditionalOptions extensions) &&
@@ -46,6 +47,7 @@ if [[ -f $SPICETIFY_CONFIG ]]; then
   fi
 
   state=$(spotify_state)
+  restored_settings=0
   if [[ $state == applied || $state == mixed ]]; then
     if confirm "Put Spotify back to stock? Say no to keep your other Spicetify customizations (re-applied without this extension)." "$default"; then
       stop_spotify || die "Spotify didn't quit; close it and run this again"
@@ -60,11 +62,17 @@ if [[ -f $SPICETIFY_CONFIG ]]; then
       fi
       say "Spotify is stock again."
     else
+      # The re-apply should use the settings from before install.
+      put_back_settings
+      restored_settings=1
       stop_spotify || die "Spotify didn't quit; close it and run this again"
       spicetify_apply
     fi
     start_spotify_if_it_was_running
   fi
+  # After a restore, so it runs with the update check still off (offline it
+  # only prints errors).
+  ((restored_settings)) || put_back_settings
 fi
 
 if [[ -L $SPICETIFY_EXT_DIR/$EXT_NAME ]]; then
