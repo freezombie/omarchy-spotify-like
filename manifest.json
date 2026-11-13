@@ -20,6 +20,6 @@
     "description": "Heart for the playing Spotify track: left-click adds it to Liked Songs, right-click removes it.",
     "category": "Media",
     "allowMultiple": false,
-    "defaultSection": "centerEnd"
+    "defaultSection": "center"
   }
 }
