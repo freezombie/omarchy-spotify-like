@@ -151,18 +151,28 @@ spicetify_apply() {
   esac
 }
 
-# Spotify's embedded Chromium crashes when its app files are replaced while it
-# runs, so quit it before patching and start it again afterwards.
-stop_spotify() {
+wait_spotify_gone() { # <tenths of a second>
   local i
-  pgrep -x spotify >/dev/null || return 0
-  SPOTIFY_WAS_RUNNING=1
-  pkill -x spotify || true
-  for i in {1..50}; do
+  for ((i = 0; i < $1; i++)); do
     pgrep -x spotify >/dev/null || return 0
     sleep 0.1
   done
   return 1
+}
+
+# Spotify must not run while its app files are replaced, so quit it before
+# patching and start it again afterwards. Quit it the way its own menu does,
+# over MPRIS: a SIGTERM makes its embedded Chromium crash (SIGTRAP core dump).
+# SIGTERM only as a fallback.
+stop_spotify() {
+  pgrep -x spotify >/dev/null || return 0
+  SPOTIFY_WAS_RUNNING=1
+  if busctl --user call org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 \
+    org.mpris.MediaPlayer2 Quit >/dev/null 2>&1 && wait_spotify_gone 100; then
+    return 0
+  fi
+  pkill -x spotify || true
+  wait_spotify_gone 50
 }
 
 start_spotify_if_it_was_running() {
