@@ -75,8 +75,15 @@ if [[ -f $SPICETIFY_CONFIG ]]; then
   ((restored_settings)) || put_back_settings
 fi
 
-if [[ -L $SPICETIFY_EXT_DIR/$EXT_NAME ]]; then
+# A copy since 0.2.0, a symlink before.
+if [[ -L $SPICETIFY_EXT_DIR/$EXT_NAME ]] || { [[ -f $SPICETIFY_EXT_DIR/$EXT_NAME ]] &&
+  grep -q 'spotify-like-bridge' "$SPICETIFY_EXT_DIR/$EXT_NAME"; }; then
   rm -f "$SPICETIFY_EXT_DIR/$EXT_NAME"
+fi
+if [[ -e $SECRET_FILE ]]; then
+  rm -f "$SECRET_FILE"
+  rmdir "$SECRET_DIR" 2>/dev/null || true
+  say "Removed the shared secret."
 fi
 
 if [[ -f $HOOK_PATH ]]; then

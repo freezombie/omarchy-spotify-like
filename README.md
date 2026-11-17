@@ -43,8 +43,10 @@ omarchy plugin add https://github.com/freezombie/omarchy-spotify-like --enable
 2. Offers safer Spicetify settings (see [Security](#security)). Default yes
    on a fresh Spicetify; if you already use Spicetify themes or extensions,
    the default is no and nothing else in your setup changes.
-3. Adds the `spotify-like-bridge.js` extension to Spicetify's list, next to
-   any extensions you already have.
+3. Creates a random secret in `~/.config/spotify-like/secret` (readable only
+   by you) and gives Spicetify a private copy of the `spotify-like-bridge.js`
+   extension with that secret in it. Adds the extension to Spicetify's list,
+   next to any extensions you already have.
 4. Patches Spotify, offline. If Spotify is open, it's closed for that and
    started again afterwards (it crashes if its files change while it runs).
 5. Offers a post-update hook (`~/.config/omarchy/hooks/post-update.d/spotify-like-repatch`)
@@ -121,7 +123,10 @@ omarchy restart shell
 ```
 
 Spicetify copies the extension into Spotify when it patches, so run
-`setup/install` again after an update to pick up a changed extension. The
+`setup/install` again after an update to pick up a changed extension
+(the post-update hook also does this when it re-patches). **Updating from
+0.1.x:** the extension and the bar now authenticate each other, so the heart
+stays disconnected until you run `setup/install` again. The
 shell keeps the plugin's service loaded, so restart it to load a changed
 `Service.qml`.
 
@@ -132,8 +137,8 @@ shell keeps the plugin's service loaded, so restart it to load a changed
 omarchy plugin remove freezombie.spotify-like
 ```
 
-`setup/uninstall` removes the extension from Spicetify and puts back the
-settings install changed. It removes the hook and, once Spotify is back to
+`setup/uninstall` removes the extension and the shared secret, and puts
+back the settings install changed. It removes the hook and, once Spotify is back to
 stock, your write access to `/opt/spotify`. If install set Spicetify up for
 this plugin alone, it offers `spicetify restore`. If you use Spicetify for
 other things, it re-applies your setup without this extension.
@@ -151,6 +156,9 @@ other things, it re-applies your setup without this extension.
     (`qs log -p /usr/share/omarchy/shell | grep spotify-like`).
   - A `rejected origin` line there means your Spotify identifies itself
     differently; please open an issue with that line.
+  - `"error":"no shared secret: …"` in the status, or a `wrong proof` line in
+    the shell log, means the extension and the bridge don't share the same
+    secret, usually after updating from 0.1.x. Run `setup/install` again.
 - **The heart isn't next to the media widget.** Check `"mediaWidget"` and
   `"placement"` in the status. An empty `mediaWidget` means yours isn't
   recognised: set `mediaWidget` (see [Settings](#settings)). Then run
@@ -190,6 +198,18 @@ can. Both ends were written to keep that narrow.
 - Accepts a connection only with the Spotify app's `Origin`
   (`https://xpui.app.spotify.com`) and a local `Host`. Web pages in a browser
   always send their real origin, so they can't connect.
+- Both ends prove they know a per-install secret before anything else
+  passes (HMAC-SHA256 challenge-response with fresh random nonces from each
+  side). `setup/install` creates the secret in
+  `~/.config/spotify-like/secret` (mode 600) and writes it into Spicetify's
+  copy of the extension (also private to you); the plugin's own copy has
+  only a placeholder. Localhost ports aren't per user: without this, a
+  process of another account on the machine (a system service, another
+  login) could take port 47851 while the bar isn't running, see what you
+  play and like or unlike it, or connect to the bridge posing as the
+  extension. Now the extension sends nothing and applies no command until
+  the server has proved the secret, and the bridge ignores a client until it
+  has.
 - Accepts only small messages of one exact shape (a track URI and true,
   false or null). Anything else closes the connection.
 - The newest connection wins, and a connection silent for 20 seconds is

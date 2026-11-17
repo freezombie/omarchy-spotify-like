@@ -6,7 +6,6 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-plugin_dir=$(dirname "$here")
 # shellcheck source=setup/common.sh
 . "$here/common.sh"
 parse_args "$@"
@@ -50,7 +49,8 @@ need_acl=0
 
 step "What this will do"
 ((need_acl)) && say "- Give your user (only) write access to $SPOTIFY_DIR with ACLs (needs sudo)."
-say "- Add the $EXT_NAME extension to Spicetify (your other extensions stay)."
+say "- Add the $EXT_NAME extension to Spicetify (your other extensions stay), with"
+say "  a secret only it and the bar know (kept in $SECRET_FILE)."
 if [[ $state == applied ]]; then
   say "- Re-apply Spicetify, offline."
 else
@@ -97,8 +97,8 @@ else
 fi
 
 step "Extension"
-mkdir -p "$SPICETIFY_EXT_DIR"
-ln -sfn "$plugin_dir/spicetify/$EXT_NAME" "$SPICETIFY_EXT_DIR/$EXT_NAME"
+ensure_secret
+write_extension
 if ! extension_enabled; then
   # Appends to the list; other extensions stay.
   spicetify config extensions "$EXT_NAME" >/dev/null

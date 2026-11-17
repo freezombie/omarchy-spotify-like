@@ -25,6 +25,10 @@ if [[ $(state_get acl) == 1 ]]; then
   grant_acl -n || { warn "could not restore write access; run the plugin's setup/install"; exit 0; }
 fi
 
+# Picks up a changed extension from a plugin update too.
+(ensure_secret && write_extension) || warn "could not update the extension; run the plugin's setup/install"
+
 stop_spotify || { warn "Spotify didn't quit; run the plugin's setup/install"; exit 0; }
 spicetify_offline backup apply || warn "re-patching Spotify failed; run the plugin's setup/install"
+lock_down_extension_copy
 start_spotify_if_it_was_running

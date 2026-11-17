@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "freezombie.spotify-like",
   "name": "Spotify Like",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "freezombie",
   "license": "MIT",
   "description": "A heart in the bar that shows whether the playing Spotify track is in Liked Songs and adds it on click. Works on Free accounts through a small Spicetify extension; no Web API, no login.",

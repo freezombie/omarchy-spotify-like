@@ -10,6 +10,10 @@ HOOK_NAME=spotify-like-repatch
 HOOK_PATH="$HOME/.config/omarchy/hooks/post-update.d/$HOOK_NAME"
 STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/spotify-like/install.state"
 SPICETIFY_EXT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/spicetify/Extensions"
+# The secret the extension and the bridge share (README → Security).
+SECRET_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/spotify-like"
+SECRET_FILE="$SECRET_DIR/secret"
+PLUGIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 # Settings the install offers to turn off, and why (README → Security).
 HARDENING_KEYS=(check_spicetify_update inject_theme_js experimental_features home_config sidebar_config)
@@ -100,6 +104,44 @@ choose() {
   printf '%s\n' "${options[answer - 1]}"
 }
 
+# Create the shared secret once: 32 random bytes as hex, readable only by you.
+ensure_secret() {
+  if [[ -f $SECRET_FILE ]] && grep -qxE '[0-9a-f]{64}' "$SECRET_FILE"; then
+    return 0
+  fi
+  (
+    umask 077
+    mkdir -p "$SECRET_DIR"
+    local tmp
+    tmp=$(mktemp "$SECRET_FILE.XXXXXX")
+    od -An -vtx1 -N32 /dev/urandom | tr -d ' \n' >"$tmp"
+    printf '\n' >>"$tmp"
+    mv "$tmp" "$SECRET_FILE"
+  )
+  chmod 700 "$SECRET_DIR"
+  grep -qxE '[0-9a-f]{64}' "$SECRET_FILE" || die "could not create $SECRET_FILE"
+}
+
+# Give Spicetify a private copy of the extension with the secret filled in
+# (the plugin's own copy has a placeholder and is world-readable).
+write_extension() {
+  local secret tmp
+  secret=$(<"$SECRET_FILE")
+  mkdir -p "$SPICETIFY_EXT_DIR"
+  tmp=$(umask 077 && mktemp "$SPICETIFY_EXT_DIR/.$EXT_NAME.XXXXXX")
+  sed "s/@SPOTIFY_LIKE_SECRET@/$secret/" "$PLUGIN_DIR/spicetify/$EXT_NAME" >"$tmp"
+  grep -q "\"$secret\"" "$tmp" || { rm -f "$tmp"; die "could not write the extension"; }
+  # Replaces the symlink earlier versions made.
+  mv -f "$tmp" "$SPICETIFY_EXT_DIR/$EXT_NAME"
+}
+
+# Spicetify's copy inside Spotify holds the secret too: keep it private.
+lock_down_extension_copy() {
+  local copy="$SPOTIFY_DIR/Apps/xpui/extensions/$EXT_NAME"
+  [[ -f $copy ]] && chmod go= "$copy" 2>/dev/null
+  return 0
+}
+
 # Find Spicetify's config-xpui.ini once; ini_get reads it from then on.
 load_spicetify_config() {
   SPICETIFY_CONFIG=$(spicetify -c 2>/dev/null || true)
@@ -182,6 +224,7 @@ spicetify_apply() {
     ;;
   *) die "$SPOTIFY_DIR/Apps looks broken; reinstall Spotify (sudo pacman -S spotify) and run this again" ;;
   esac
+  lock_down_extension_copy
 }
 
 wait_spotify_gone() { # <tenths of a second>

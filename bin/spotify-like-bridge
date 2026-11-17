@@ -15,6 +15,10 @@ Security (see README → Security):
 - binds 127.0.0.1 only;
 - accepts a WebSocket handshake only from the Spotify app's origin, so web
   pages in a browser cannot connect (browsers always send their real Origin);
+- both ends prove they know the per-install secret that setup/install wrote
+  (HMAC-SHA256 challenge-response) before any state or command passes, so a
+  process of another local user can neither pose as the bridge (by taking the
+  port first) nor as the extension;
 - accepts only small, fully validated messages; anything else drops the client.
 
 Standard library only. Run with `python3 -I` so nothing is imported from the
@@ -23,6 +27,7 @@ working directory or the user's site-packages.
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -47,6 +52,17 @@ MAX_HANDSHAKE = 8192
 MAX_PAYLOAD = 2048
 HANDSHAKE_TIMEOUT = 5.0
 STALE_AFTER = 20.0  # the extension sends a heartbeat every 5 s
+SECRET_FILE = os.environ.get(
+    "SPOTIFY_LIKE_SECRET_FILE",
+    os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "spotify-like",
+        "secret",
+    ),
+)
+SECRET_RE = re.compile(r"[0-9a-f]{64}")
+NONCE_RE = re.compile(r"[0-9a-f]{32}")
+NOT_SET_UP = "no shared secret: run the plugin's setup/install"
 
 out_lock = threading.Lock()
 state_lock = threading.Lock()
@@ -177,7 +193,72 @@ def handshake(conn):
             f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
         ).encode()
     )
-    conn.settimeout(None)
+    return True
+
+
+# --- Authentication ---------------------------------------------------------
+#
+#   extension -> bridge  {"type": "hello", "nonce": c}
+#   bridge -> extension  {"type": "hello", "nonce": s, "proof": HMAC(k, "server " + c + " " + s)}
+#   extension -> bridge  {"type": "auth", "proof": HMAC(k, "client " + s + " " + c)}
+#
+# k is the secret (its 64 hex characters as the key), nonces are 16 random
+# bytes in hex, proofs are hex. The extension checks the bridge's proof before
+# it sends anything else or accepts a command; the bridge checks the
+# extension's proof before it takes the connection.
+
+
+def load_secret():
+    """The shared secret, or None when setup/install hasn't written one."""
+    try:
+        with open(SECRET_FILE, encoding="ascii") as f:
+            secret = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return secret if SECRET_RE.fullmatch(secret) else None
+
+
+def proof(secret, role, first, second):
+    msg = f"{role} {first} {second}".encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def read_text(conn):
+    """Next text frame as parsed JSON (answering pings), or raise."""
+    while True:
+        opcode, payload = read_frame(conn)
+        if opcode == 0x8:
+            raise ConnectionError("closed")
+        if opcode == 0x9:
+            send_frame(conn, 0xA, payload)
+            continue
+        if opcode != 0x1:
+            raise ValueError("only text frames are accepted")
+        return json.loads(payload.decode("utf-8"))
+
+
+def authenticate(conn):
+    """Run the challenge-response; True when the extension proved itself."""
+    secret = load_secret()
+    if secret is None:
+        log(NOT_SET_UP)
+        emit({"type": "error", "message": NOT_SET_UP})
+        return False
+    hello = read_text(conn)
+    if not isinstance(hello, dict) or hello.get("type") != "hello" \
+            or not isinstance(hello.get("nonce"), str) or not NONCE_RE.fullmatch(hello["nonce"]):
+        raise ValueError("expected hello")
+    client_nonce = hello["nonce"]
+    server_nonce = os.urandom(16).hex()
+    reply = {"type": "hello", "nonce": server_nonce,
+             "proof": proof(secret, "server", client_nonce, server_nonce)}
+    send_frame(conn, 0x1, json.dumps(reply).encode())
+    auth = read_text(conn)
+    if not isinstance(auth, dict) or auth.get("type") != "auth" or not isinstance(auth.get("proof"), str):
+        raise ValueError("expected auth")
+    if not hmac.compare_digest(auth["proof"], proof(secret, "client", server_nonce, client_nonce)):
+        log("rejected client: wrong proof (old extension? run setup/install)")
+        return False
     return True
 
 
@@ -203,6 +284,11 @@ def serve_client(conn, addr):
     try:
         if not handshake(conn):
             return
+        # The handshake timeout also covers authentication.
+        conn.settimeout(HANDSHAKE_TIMEOUT)
+        if not authenticate(conn):
+            return
+        conn.settimeout(None)
         with state_lock:
             old = current["conn"]
             current["conn"] = conn
@@ -232,7 +318,7 @@ def serve_client(conn, addr):
                     return
                 current["last_seen"] = time.monotonic()
             publish(True, uri, liked)
-    except (OSError, ValueError, ConnectionError, UnicodeDecodeError) as exc:
+    except (OSError, ValueError, ConnectionError, UnicodeDecodeError, socket.timeout) as exc:
         if not isinstance(exc, ConnectionError):
             log(f"dropping client: {exc}")
     finally:
@@ -296,6 +382,8 @@ def main():
         return 1
     srv.listen(4)
     emit({"type": "state", **state})
+    if load_secret() is None:
+        emit({"type": "error", "message": NOT_SET_UP})
     threading.Thread(target=watchdog, daemon=True).start()
     threading.Thread(target=read_commands, daemon=True).start()
     while True:
